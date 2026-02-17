@@ -1,10 +1,14 @@
-function decodeHtml(str) {
+function maybeDecodeHtml(str) {
+  // Only decode if HTML entities exist
+  if (!str.includes("&#")) return str;
+
   return str
-    .replace(/&quot;|&#34;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'");
+    .replace(/&#34;/g, '"')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 export default async function handler(req, res) {
@@ -21,7 +25,7 @@ export default async function handler(req, res) {
     const response = await fetch(url, {
       headers: {
         "user-agent":
-          "Mozilla/5.0 (Linux; Android 12; Mobile Safari/537.36)",
+          "Mozilla/5.0 (Linux; Android 13; Mobile Safari/537.36)",
         "accept-language": "en-US,en;q=0.9"
       }
     });
@@ -37,39 +41,40 @@ export default async function handler(req, res) {
       return res.status(503).json({ error: "blocked or consent page" });
     }
 
-    const marker = "var ytInitialData =";
-    const markerIndex = html.indexOf(marker);
-
-    if (markerIndex === -1) {
+    // Locate ytInitialData
+    const marker = "ytInitialData";
+    const idx = html.indexOf(marker);
+    if (idx === -1) {
       return res.status(500).json({
-        error: "ytInitialData marker not found"
+        error: "ytInitialData not found"
       });
     }
 
-    const jsonStart = html.indexOf("{", markerIndex);
-    if (jsonStart === -1) {
+    // Find first {
+    const start = html.indexOf("{", idx);
+    if (start === -1) {
       return res.status(500).json({
-        error: "ytInitialData JSON start not found"
+        error: "JSON start not found"
       });
     }
 
-    // brace counting
-    let braceCount = 0;
-    let i = jsonStart;
+    // Brace counting
+    let brace = 0;
+    let end = start;
 
-    for (; i < html.length; i++) {
-      if (html[i] === "{") braceCount++;
-      else if (html[i] === "}") braceCount--;
-      if (braceCount === 0) {
-        i++;
+    for (; end < html.length; end++) {
+      if (html[end] === "{") brace++;
+      else if (html[end] === "}") brace--;
+      if (brace === 0) {
+        end++;
         break;
       }
     }
 
-    let jsonString = html.slice(jsonStart, i);
+    let jsonString = html.slice(start, end);
 
-    // 🔑 CRITICAL FIX
-    jsonString = decodeHtml(jsonString);
+    // 🔑 decode ONLY if escaped (sample file case)
+    jsonString = maybeDecodeHtml(jsonString);
 
     let data;
     try {
@@ -77,10 +82,11 @@ export default async function handler(req, res) {
     } catch (e) {
       return res.status(500).json({
         error: "ytInitialData JSON parse failed",
-        reason: "HTML-escaped JSON"
+        hint: "HTML was altered before parsing"
       });
     }
 
+    // Extract first videoId
     const sections =
       data?.contents
         ?.twoColumnSearchResultsRenderer
@@ -120,4 +126,4 @@ export default async function handler(req, res) {
   } catch {
     res.status(500).json({ error: "internal error" });
   }
-  }
+      }
