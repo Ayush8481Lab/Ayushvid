@@ -1,3 +1,18 @@
+function decodeHtmlEntities(str) {
+  return str
+    // numeric entities
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) =>
+      String.fromCharCode(parseInt(n, 16))
+    )
+    // named entities (minimum required)
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&apos;/g, "'");
+}
+
 export default async function handler(req, res) {
   try {
     const q = req.query.q;
@@ -19,36 +34,35 @@ export default async function handler(req, res) {
 
     const html = await response.text();
 
-    // block / consent detection
+    // 🔒 consent / block detection
     if (
       html.includes("Before you continue to YouTube") ||
       html.includes("consent.youtube.com") ||
       html.includes("captcha")
     ) {
-      return res.status(503).json({ error: "blocked or consent page" });
+      return res.status(503).json({ error: "consent or blocked" });
     }
 
-    // 1️⃣ Locate ytInitialData assignment
+    // 1️⃣ find ytInitialData
     const key = "ytInitialData";
     const idx = html.indexOf(key);
     if (idx === -1) {
       return res.status(500).json({ error: "ytInitialData not found" });
     }
 
-    // 2️⃣ Find first { after it
+    // 2️⃣ find JSON start
     const start = html.indexOf("{", idx);
     if (start === -1) {
       return res.status(500).json({ error: "JSON start not found" });
     }
 
-    // 3️⃣ Brace-count to extract object
+    // 3️⃣ brace counting
     let brace = 0;
     let end = start;
 
     for (; end < html.length; end++) {
       if (html[end] === "{") brace++;
       else if (html[end] === "}") brace--;
-
       if (brace === 0) {
         end++;
         break;
@@ -57,18 +71,21 @@ export default async function handler(req, res) {
 
     let objectString = html.slice(start, end);
 
-    // 4️⃣ Evaluate as JavaScript (NOT JSON)
+    // 🔑 CRITICAL STEP
+    objectString = decodeHtmlEntities(objectString);
+
+    // 4️⃣ evaluate as JS
     let data;
     try {
-      data = Function("return " + objectString)();
+      data = Function('"use strict";return (' + objectString + ')')();
     } catch (e) {
       return res.status(500).json({
         error: "ytInitialData eval failed",
-        reason: "JS object, not strict JSON"
+        note: "HTML is altered; this does NOT happen on real fetch()"
       });
     }
 
-    // 5️⃣ Extract first videoId
+    // 5️⃣ extract first videoId
     const sections =
       data?.contents
         ?.twoColumnSearchResultsRenderer
@@ -103,7 +120,7 @@ export default async function handler(req, res) {
       query: q,
       result: videoId
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "internal error" });
   }
-  }
+}
