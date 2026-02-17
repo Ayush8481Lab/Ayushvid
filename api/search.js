@@ -1,16 +1,3 @@
-function maybeDecodeHtml(str) {
-  // Only decode if HTML entities exist
-  if (!str.includes("&#")) return str;
-
-  return str
-    .replace(/&#34;/g, '"')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
 export default async function handler(req, res) {
   try {
     const q = req.query.q;
@@ -32,7 +19,7 @@ export default async function handler(req, res) {
 
     const html = await response.text();
 
-    // consent / block detection
+    // block / consent detection
     if (
       html.includes("Before you continue to YouTube") ||
       html.includes("consent.youtube.com") ||
@@ -41,52 +28,47 @@ export default async function handler(req, res) {
       return res.status(503).json({ error: "blocked or consent page" });
     }
 
-    // Locate ytInitialData
-    const marker = "ytInitialData";
-    const idx = html.indexOf(marker);
+    // 1️⃣ Locate ytInitialData assignment
+    const key = "ytInitialData";
+    const idx = html.indexOf(key);
     if (idx === -1) {
-      return res.status(500).json({
-        error: "ytInitialData not found"
-      });
+      return res.status(500).json({ error: "ytInitialData not found" });
     }
 
-    // Find first {
+    // 2️⃣ Find first { after it
     const start = html.indexOf("{", idx);
     if (start === -1) {
-      return res.status(500).json({
-        error: "JSON start not found"
-      });
+      return res.status(500).json({ error: "JSON start not found" });
     }
 
-    // Brace counting
+    // 3️⃣ Brace-count to extract object
     let brace = 0;
     let end = start;
 
     for (; end < html.length; end++) {
       if (html[end] === "{") brace++;
       else if (html[end] === "}") brace--;
+
       if (brace === 0) {
         end++;
         break;
       }
     }
 
-    let jsonString = html.slice(start, end);
+    let objectString = html.slice(start, end);
 
-    // 🔑 decode ONLY if escaped (sample file case)
-    jsonString = maybeDecodeHtml(jsonString);
-
+    // 4️⃣ Evaluate as JavaScript (NOT JSON)
     let data;
     try {
-      data = JSON.parse(jsonString);
+      data = Function("return " + objectString)();
     } catch (e) {
       return res.status(500).json({
-        error: "ytInitialData JSON parse failed",
-        hint: "HTML was altered before parsing"
+        error: "ytInitialData eval failed",
+        reason: "JS object, not strict JSON"
       });
     }
 
-    // Extract first videoId
+    // 5️⃣ Extract first videoId
     const sections =
       data?.contents
         ?.twoColumnSearchResultsRenderer
@@ -109,9 +91,7 @@ export default async function handler(req, res) {
     }
 
     if (!videoId) {
-      return res.status(404).json({
-        error: "no video found"
-      });
+      return res.status(404).json({ error: "no video found" });
     }
 
     res.setHeader(
@@ -123,7 +103,7 @@ export default async function handler(req, res) {
       query: q,
       result: videoId
     });
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: "internal error" });
   }
-      }
+  }
