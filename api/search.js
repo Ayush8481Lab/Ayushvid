@@ -1,7 +1,6 @@
 export default async function handler(req, res) {
   try {
     const q = req.query.q;
-
     if (!q) {
       return res.status(400).json({ error: "query required" });
     }
@@ -10,59 +9,69 @@ export default async function handler(req, res) {
       "https://m.youtube.com/results?search_query=" +
       encodeURIComponent(q);
 
-    const r = await fetch(url, {
+    const response = await fetch(url, {
       headers: {
         "user-agent":
-          "Mozilla/5.0 (Linux; Android 11; Mobile Safari/537.36)",
+          "Mozilla/5.0 (Linux; Android 12; Mobile Safari/537.36)",
         "accept-language": "en-US,en;q=0.9"
       }
     });
 
-    if (!r.ok) {
-      return res.status(500).json({ error: "fetch failed" });
-    }
+    const html = await response.text();
 
-    const html = await r.text();
-
-    // 1️⃣ Detect block / captcha / consent
+    // Block / consent detection (VERY important)
     if (
-      !html ||
-      html.length < 1000 ||
-      html.includes("captcha") ||
-      html.includes("consent") ||
-      html.includes("unusual traffic")
+      html.includes("Before you continue to YouTube") ||
+      html.includes("consent.youtube.com") ||
+      html.includes("captcha")
     ) {
-      return res.status(503).json({ error: "blocked by youtube" });
+      return res.status(503).json({ error: "consent or blocked" });
     }
 
-    // 2️⃣ Ensure ytInitialData exists
-    if (!html.includes("ytInitialData")) {
+    // 1️⃣ Find ytInitialData
+    const marker = "var ytInitialData =";
+    const markerIndex = html.indexOf(marker);
+
+    if (markerIndex === -1) {
       return res.status(500).json({
-        error: "ytInitialData string missing"
+        error: "ytInitialData marker not found"
       });
     }
 
-    // 3️⃣ Robust extraction (handles all known formats)
-    const match = html.match(
-      /(?:var |window\["ytInitialData"\]|ytInitialData)\s*=\s*(\{[\s\S]*?\});/
-    );
-
-    if (!match || !match[1]) {
+    // 2️⃣ Find JSON start
+    const jsonStart = html.indexOf("{", markerIndex);
+    if (jsonStart === -1) {
       return res.status(500).json({
-        error: "ytInitialData regex failed"
+        error: "ytInitialData JSON start not found"
       });
     }
+
+    // 3️⃣ Brace-count JSON end
+    let braceCount = 0;
+    let i = jsonStart;
+
+    for (; i < html.length; i++) {
+      if (html[i] === "{") braceCount++;
+      else if (html[i] === "}") braceCount--;
+
+      if (braceCount === 0) {
+        i++;
+        break;
+      }
+    }
+
+    const jsonString = html.slice(jsonStart, i);
 
     let data;
     try {
-      data = JSON.parse(match[1]);
-    } catch (e) {
+      data = JSON.parse(jsonString);
+    } catch {
       return res.status(500).json({
         error: "ytInitialData JSON parse failed"
       });
     }
 
-    // 4️⃣ Traverse safely to find first videoId
+    // 4️⃣ Navigate EXACT path for search results
     const sections =
       data?.contents
         ?.twoColumnSearchResultsRenderer
@@ -75,7 +84,6 @@ export default async function handler(req, res) {
     for (const section of sections) {
       const items =
         section?.itemSectionRenderer?.contents || [];
-
       for (const item of items) {
         if (item?.videoRenderer?.videoId) {
           videoId = item.videoRenderer.videoId;
@@ -87,11 +95,10 @@ export default async function handler(req, res) {
 
     if (!videoId) {
       return res.status(404).json({
-        error: "no video found"
+        error: "no video found in ytInitialData"
       });
     }
 
-    // 5️⃣ Cache to reduce blocks
     res.setHeader(
       "Cache-Control",
       "s-maxage=600, stale-while-revalidate"
@@ -102,8 +109,6 @@ export default async function handler(req, res) {
       result: videoId
     });
   } catch (err) {
-    res.status(500).json({
-      error: "internal error"
-    });
+    res.status(500).json({ error: "internal error" });
   }
-          }
+                                  }
