@@ -1,3 +1,12 @@
+function decodeHtml(str) {
+  return str
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'");
+}
+
 export default async function handler(req, res) {
   try {
     const q = req.query.q;
@@ -19,16 +28,15 @@ export default async function handler(req, res) {
 
     const html = await response.text();
 
-    // Block / consent detection (VERY important)
+    // consent / block detection
     if (
       html.includes("Before you continue to YouTube") ||
       html.includes("consent.youtube.com") ||
       html.includes("captcha")
     ) {
-      return res.status(503).json({ error: "consent or blocked" });
+      return res.status(503).json({ error: "blocked or consent page" });
     }
 
-    // 1️⃣ Find ytInitialData
     const marker = "var ytInitialData =";
     const markerIndex = html.indexOf(marker);
 
@@ -38,7 +46,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // 2️⃣ Find JSON start
     const jsonStart = html.indexOf("{", markerIndex);
     if (jsonStart === -1) {
       return res.status(500).json({
@@ -46,32 +53,34 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3️⃣ Brace-count JSON end
+    // brace counting
     let braceCount = 0;
     let i = jsonStart;
 
     for (; i < html.length; i++) {
       if (html[i] === "{") braceCount++;
       else if (html[i] === "}") braceCount--;
-
       if (braceCount === 0) {
         i++;
         break;
       }
     }
 
-    const jsonString = html.slice(jsonStart, i);
+    let jsonString = html.slice(jsonStart, i);
+
+    // 🔑 CRITICAL FIX
+    jsonString = decodeHtml(jsonString);
 
     let data;
     try {
       data = JSON.parse(jsonString);
-    } catch {
+    } catch (e) {
       return res.status(500).json({
-        error: "ytInitialData JSON parse failed"
+        error: "ytInitialData JSON parse failed",
+        reason: "HTML-escaped JSON"
       });
     }
 
-    // 4️⃣ Navigate EXACT path for search results
     const sections =
       data?.contents
         ?.twoColumnSearchResultsRenderer
@@ -95,7 +104,7 @@ export default async function handler(req, res) {
 
     if (!videoId) {
       return res.status(404).json({
-        error: "no video found in ytInitialData"
+        error: "no video found"
       });
     }
 
@@ -108,7 +117,7 @@ export default async function handler(req, res) {
       query: q,
       result: videoId
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "internal error" });
   }
-                                  }
+  }
