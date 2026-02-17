@@ -1,4 +1,7 @@
 {
-  "name": "yt-search-api",
-  "private": true
+  "name": "youtube-api",
+  "version": "1.0.0",
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
 }
